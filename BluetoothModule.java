@@ -7,9 +7,13 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.Handler;
+import android.os.Message;
 import android.util.Base64;
 import android.util.Log;
+import android.widget.Toast;
 
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.alibaba.weex.plugin.annotation.WeexModule;
@@ -21,14 +25,11 @@ import com.tools.command.LabelCommand;
 import com.tools.io.BluetoothPort;
 
 
-import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Vector;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Created by MA on 17/10/18.
@@ -46,14 +47,12 @@ public class BluetoothModule extends WXModule {
 
   private BluetoothPort mPort = null;
 
+//  private com.mo.erosplugingprinter.EscCommand mCommand = null;
 
   private Vector<Byte> datas = null;
 
   private JSCallback onDiscovery;
   private JSCallback onDiscoveryOver;
-  private JSCallback tscCallback;
-
-  private HashMap queryResult;
 
   public BluetoothModule() {
     mBluetoothUtil = new BluetoothUtil(BluetoothAdapter.getDefaultAdapter());
@@ -65,7 +64,7 @@ public class BluetoothModule extends WXModule {
 //    public String getName() {
 //        return BLUETOOTH_MODULE;
 //    }
-  private  final String TAG = BluetoothModule.this.getClass().getName();
+  public  final String TAG = BluetoothModule.this.getClass().getName();
 
   /**
    * 是否支持蓝牙
@@ -117,26 +116,27 @@ public class BluetoothModule extends WXModule {
     callback.invoke(devices);
   }
 
+  public String key = "";
   /**
    * 开始搜索设备
    *
    * @param
    */
   @JSMethod
-  public void searchDevices(JSCallback callback) {
-    this.onDiscovery = callback;
+  public void searchDevices(String key) {
+    this.key = key;
     mBluetoothUtil.registerBluetoothReceiver(this.mWXSDKInstance.getContext(), searchDevicesReceiver);
     mBluetoothUtil.startDiscoveryDevices();
   }
 
   /**
-   * 停止搜索设备
+   * 发现设备的通知
    *
-   * @param
+   * @param callback
    */
-  @JSMethod (uiThread = false)
-  public void stopSearchDevices(){
-    mBluetoothUtil.cancelDisoveryDevices();
+  @JSMethod
+  public void onDiscovery(JSCallback callback) {
+    this.onDiscovery = callback;
   }
 
   /**
@@ -154,6 +154,8 @@ public class BluetoothModule extends WXModule {
    */
   public BroadcastReceiver searchDevicesReceiver = new BroadcastReceiver() {
     String unbondAddress = "";
+    String bondedAddress = "";
+
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -169,6 +171,8 @@ public class BluetoothModule extends WXModule {
             HashMap unBondDevices = new HashMap();
             unBondDevices.put("deviceName", device.getName());
             unBondDevices.put("deviceAddress", device.getAddress());
+//                        sendUnbondDevice(BluetoothModule.this.mWXSDKInstance.getContext(),
+//                                "getUnbondDevices", unBondDevices);
 
 
             unbondAddress += device.getAddress()+"|";
@@ -176,18 +180,22 @@ public class BluetoothModule extends WXModule {
             Log.i(TAG, "onReceive: "+device.getName()+":"+device.getAddress());
           }
         }
+//        HashMap map = new HashMap();
+//        map.put("data",mUnbondDevices);
+//                EventBus.getDefault().post(new Event(key,map));
       } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
         //搜索结束解除注册
         BluetoothModule.this.mWXSDKInstance.getContext().unregisterReceiver(this);
         mBluetoothUtil.cancelDisoveryDevices();
         //运行js中的onDiscoveryOver回调函数
         onDiscoveryOver.invoke("搜索结束");
+
+//        HashMap map = new HashMap();
+//        map.put("data",mUnbondDevices);
+//                EventBus.getDefault().post(new Event(key,map));
       }
     }
   };
-
-
-
 
 
 //    /**
@@ -352,6 +360,11 @@ public class BluetoothModule extends WXModule {
    */
   @JSMethod
   public void printLabel(final JSONObject options) {
+    if (!options.containsKey("address") || options.getString("address") == "") {
+//      promise.reject("INVALID_PARAMS", "Invalid params: address is required.");
+      return;
+    }
+    String address = options.getString("address");//蓝牙地址
     int width = options.getInteger("width");
     int height = options.getInteger("height");
     int gap = options.containsKey("gap") ? options.getInteger("gap") : 0;
@@ -492,10 +505,7 @@ public class BluetoothModule extends WXModule {
     tsc.addPrint( 1, 1 );
     /* 打印标签后 蜂鸣器响 */
     tsc.addSound( 2, 100 );
-    /* 按下 FEED 按键， 打印下一个标签 */
-    tsc.addPrintKey(EscCommand.ENABLE.OFF);
-    /* 开启钱箱 */
-//    tsc.addCashdrwer( LabelCommand.FOOT.F5, 255, 255 );
+    tsc.addCashdrwer( LabelCommand.FOOT.F5, 255, 255 );
     Vector<Byte> datas = tsc.getCommand();
     /* 发送数据 */
     if (this.mPort == null) {
@@ -512,151 +522,4 @@ public class BluetoothModule extends WXModule {
 //    sendLabelCommand(tsc, address, promise);
   }
 
-  public int readDataImmediately(byte[] buffer) throws IOException {
-    return this.mPort.readData(buffer);
-  }
-
-  /**
-   * 判断打印机所使用指令是否是ESC指令
-   */
-
-  public PrinterReader reader;
-//  private byte[]		tscmode		= { 0x1f, 0x1b, 0x1f, (byte) 0xfc, 0x01, 0x02, 0x03, 0x33 };
-
-  /**
-   * TSC查询打印机状态指令
-   */
-  private byte[] tsc = {0x1b, '!', '?'};
-
-  /**
-   * TSC指令查询打印机实时状态 打印机缺纸状态
-   */
-  private static final int TSC_STATE_PAPER_ERR = 0x04;
-
-  /**
-   * TSC指令查询打印机实时状态 打印机正在打印
-   */
-  private static final int TSC_STATE_PRINTING = 0x20;
-
-  /**
-   * TSC指令查询打印机实时状态 打印机开盖状态
-   */
-  private static final int TSC_STATE_COVER_OPEN = 0x01;
-
-  /**
-   * TSC指令查询打印机实时状态 打印机出错状态
-   */
-  private static final int TSC_STATE_ERR_OCCURS = 0x80;
-
-  private boolean isTsc = false;
-
-
-  class PrinterReader extends Thread {
-    private boolean isRun = false;
-
-    private byte[] buffer = new byte[100];
-
-    public PrinterReader() {
-      isRun = true;
-    }
-
-    @Override
-    public void run() {
-      try {
-        while (isRun) {
-          //读取打印机返回信息
-          int len = readDataImmediately(buffer);
-          if (len > 0) {
-                if (buffer[0] == 0) {//正常
-                  queryResult.put("status",0);
-                  queryResult.put("message","正常");
-                }
-                else if ((buffer[0] & TSC_STATE_PAPER_ERR) > 0) {//缺纸
-                  queryResult.put("status",4);
-                  queryResult.put("message","打印机缺纸");
-                }
-                else if ((buffer[0] & TSC_STATE_COVER_OPEN) > 0) {//开盖
-                  queryResult.put("status",1);
-                  queryResult.put("message","打印机开盖");
-                }
-                else if ((buffer[0] & TSC_STATE_ERR_OCCURS) > 0) {//打印机报错
-                  queryResult.put("status",80);
-                  queryResult.put("message","其它错误");
-                }
-                else if ((buffer[0] & TSC_STATE_PRINTING) > 0) {//打印机正在打印
-                  queryResult.put("status",20);
-                  queryResult.put("message","打印机正在打印");
-                }
-                else {
-                  queryResult.put("status",99);
-                  queryResult.put("message","打印机异常");
-                }
-                isTsc = true;
-                isRun = false;
-                tscCallback.invoke(queryResult);
-          }
-        }
-      } catch (Exception e) {
-        // 断开连接
-//        if (deviceConnFactoryManagers[id] != null) {
-//          closePort(id);
-//        }
-      }
-    }
-
-    public void cancel() {
-      isRun = false;
-    }
-  }
-
-
-  public void sendDataImmediately(final Vector<Byte> data) {
-    if (this.mPort == null) {
-      return;
-    }
-    try {
-      this.mPort.writeDataImmediately(data, 0, data.size());
-    } catch (Exception e) {
-      e.printStackTrace();
-    }
-  }
-
-  @JSMethod
-  public void queryTsc(JSCallback callback) {
-    this.tscCallback = callback;
-    isTsc = false;
-    //开启读取打印机返回数据线程
-    reader = new PrinterReader();
-    reader.start(); //读取数据线程
-    // 发送TSC查询指令
-    final byte[] tsc = {0x1b, '!', '?'};
-    Vector<Byte> data = new Vector<>(tsc.length);
-    for (int i = 0; i < tsc.length; i++) {
-      data.add(tsc[i]);
-    }
-    sendDataImmediately(data);
-    final ThreadFactoryBuilder threadFactoryBuilder = new ThreadFactoryBuilder("Timer");
-    final ScheduledExecutorService scheduledExecutorService = new ScheduledThreadPoolExecutor(1, threadFactoryBuilder);
-    //开启计时器，隔2000毫秒打印机没有响应者停止读取打印机数据线程并且关闭端口
-    scheduledExecutorService.schedule(threadFactoryBuilder.newThread(new Runnable() {
-      @Override
-      public void run() {
-          if (reader != null && !isTsc) {
-            // 修改打印模式为tsc
-//            Vector<Byte> data = new Vector<>( tscmode.length );
-//            for ( int i = 0; i < tscmode.length; i++ )
-//            {
-//              data.add( tscmode[i] );
-//            }
-//            sendDataImmediately(data);
-            reader.cancel();
-            mPort.closePort();
-            mPort=null;
-            queryResult.put("status",1);
-            queryResult.put("message","请切换到标签模式");
-            tscCallback.invoke(queryResult);
-          }
-      }
-    }),2000,TimeUnit.MILLISECONDS);
-  }
 }
